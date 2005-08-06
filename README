@@ -42,7 +42,9 @@ DESCRIPTION
 Prerequisites:
 
 	- perl 5
-	- MIT Kerberos V5 Release 1.2.x or better
+	- MIT Kerberos V5 Release 1.2.x or better (this module
+	  also appears to work with Heimdal Kerberos, although
+	  I have not extensively tested it)
 	- Creation of an application service principal on the Kerberos
 	  server in order to verify the KDC's response. And access to
 	  a local keytab file containing the key for that principal.
@@ -65,6 +67,6 @@ Shumon Huque
 E-mail: <shuque -at- isc.upenn.edu>
 University of Pennsylvania.
 
-Copyright (c) 2004 Shumon Huque. All rights reserved.  This program is 
-free software; you can redistribute it and/or modify it under the same 
-terms as Perl itself.
+Copyright (c) 2004, 2005 Shumon Huque. All rights reserved.  This 
+program is free software; you can redistribute it and/or modify it 
+under the same terms as Perl itself.

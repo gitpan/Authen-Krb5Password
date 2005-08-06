@@ -11,7 +11,7 @@ require DynaLoader;
 # names by default without a very good reason. Use EXPORT_OK instead.
 # Do not simply export all your public functions/methods/constants.
 @EXPORT = qw(kpass);
-$VERSION = '1.01';
+$VERSION = '1.02';
 
 bootstrap Authen::Krb5Password $VERSION;
 

@@ -16,8 +16,8 @@
 
 #define CALL_FROM_PERL
 #define HAVE_VSNPRINTF
-#define TKT_LIFETIME     600
-#define USE_MEMORY_CC           /* use in-memory ccache, else use default */
+#define TKT_LIFETIME     30           /* 30 seconds */
+#define USE_MEMORY_CC                 /* use in-memory ccache */
 
 /*
  * com_err hook for logging errors to syslog.
@@ -80,27 +80,32 @@ int kpass(username, password, service, host, kt_pathname)
      char *host;
      char *kt_pathname;
 {
-    krb5_error_code     err;
-    krb5_context        context;
-    krb5_auth_context   auth_context = NULL;
-    krb5_creds          credentials;
-    krb5_principal      service_principal;
-    krb5_keytab         keytab = NULL;
-    krb5_ccache         ccache;
-    char                ccache_name[L_tmpnam + 8];
-    krb5_data           tgs_name = { 0, KRB5_TGS_NAME_SIZE, KRB5_TGS_NAME };
-    krb5_data           apreq_pkt;
+    krb5_error_code               err;
+    krb5_context                  context;
+    krb5_auth_context             auth_context = NULL;
+    krb5_creds                    credentials;
+    krb5_principal                user_principal,
+	                          service_principal;
+    krb5_keytab                   keytab = NULL;
+    krb5_ccache                   ccache;
+    char                          ccache_name[L_tmpnam + 8];
+    krb5_get_init_creds_opt       gic_options;
+    krb5_data                     apreq_pkt;
 
-    int                 have_service_principal = 0,
-	                have_keytab = 0,
-                        have_credentials = 0,
-                        success = -1;
+    int                           have_user_principal = 0,
+	                          have_service_principal = 0,
+	                          have_keytab = 0,
+                                  have_credentials = 0,
+                                  success = -1;
 
     apreq_pkt.data = NULL;
 
     err = krb5_init_context(&context);
     FAIL(err, "from krb5_init_context");
+
+#ifdef NEED_INIT_ETS
     krb5_init_ets(context);
+#endif
 
 #ifdef USE_MEMORY_CC
     (void) memset(ccache_name, 0, sizeof(ccache_name));
@@ -113,31 +118,20 @@ int kpass(username, password, service, host, kt_pathname)
     FAIL(err, "from cc_default");
 #endif
 
-    (void) memset( (char *)&credentials, 0, sizeof(credentials) );
-    err = krb5_parse_name(context, username, &credentials.client);
+    err = krb5_parse_name(context, username, &user_principal);
     FAIL(err, "from krb_parse_name");
+    have_user_principal = 1;
 
-    err = krb5_cc_initialize(context, ccache, credentials.client);
+    err = krb5_cc_initialize(context, ccache, user_principal);
     FAIL(err, "from krb_cc_initialize");
 
-    credentials.times.endtime = (krb5_timestamp) time(0) + TKT_LIFETIME;
+    krb5_get_init_creds_opt_init(&gic_options);
+    krb5_get_init_creds_opt_set_tkt_life(&gic_options, TKT_LIFETIME);
 
-    err = krb5_build_principal_ext(
-	       context, 
-	       &credentials.server,
-	       krb5_princ_realm(context, credentials.client)->length,
-	       krb5_princ_realm(context, credentials.client)->data,
-	       tgs_name.length,
-	       tgs_name.data,
-	       krb5_princ_realm(context, credentials.client)->length,
-	       krb5_princ_realm(context, credentials.client)->data,
-	       0
-	       );
-    FAIL(err, "from krb5_build_principal_ext");
-
-    err = krb5_get_in_tkt_with_password(
-	       context,
-	       0, NULL, NULL, NULL, password, ccache, &credentials, 0);
+    (void) memset( (char *)&credentials, 0, sizeof(credentials) );
+    err = krb5_get_init_creds_password(context, &credentials,
+                                       user_principal, password,
+                                       0, 0, 0, 0, &gic_options);
 
 
     switch (err) {
@@ -153,9 +147,12 @@ int kpass(username, password, service, host, kt_pathname)
 	/* fall through */
     default:
 	/* Some other sort of failure. */
-	FAIL(err, "from krb5_get_in_tkt_with_password");
+	FAIL(err, "from krb5_get_init_creds_password");
 	break;
     }
+
+    err = krb5_cc_store_cred(context, ccache, &credentials);
+    FAIL(err, "from krb5_cc_store_cred");
 
 #ifdef CALL_FROM_PERL
     /*
@@ -207,6 +204,15 @@ int kpass(username, password, service, host, kt_pathname)
 	auth_context = NULL;
     }
 
+#ifdef NO_REPLAYCACHE
+    err = krb5_auth_con_init(context, &auth_context);
+    FAIL(err, "from krb5_auth_con_init");
+
+    err = krb5_auth_con_setflags(context, auth_context, 
+                                 ~KRB5_AUTH_CONTEXT_DO_TIME);
+    FAIL(err, "from krb5_auth_con_setflags");
+#endif /* NO_REPLAYCACHE */
+
     /*
      * Now attempt to decrypt the acquired credentials.
      */
@@ -215,7 +221,11 @@ int kpass(username, password, service, host, kt_pathname)
                context,
 	       &auth_context,
 	       &apreq_pkt,
+#ifdef NO_REPLAYCACHE
+               NULL,
+#else
 	       service_principal,
+#endif
 	       keytab,
 	       NULL,
 	       NULL
@@ -240,6 +250,9 @@ cleanup:
     if (have_keytab)
 	if (err = krb5_kt_close(context, keytab))
 	    com_err("kpass", err, "from krb5_kt_close");
+
+    if (have_user_principal)
+        krb5_free_principal(context, user_principal);
 
     if (have_service_principal)
 	krb5_free_principal(context, service_principal);
