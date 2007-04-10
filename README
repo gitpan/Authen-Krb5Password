@@ -18,15 +18,21 @@ DESCRIPTION
      that these are passed to the server in a cryptographically
      secure manner.
 
-     kpass() attempts to obtain credentials for the given
-     username and password from the Kerberos AS, then obtain
-     credentials for a local service from the Kerberos TGS to
-     verify the authenticity of the AS response. Empty strings
-     can be passed as the 3rd and/or 4th arguments to use the
-     default service name ("host") and the fully canonicalized
-     primary hostname of the system that the function is executed
-     on. The fifth argument may be omitted to use the system's
-     default keytab file.
+     kpass() attempts to validate a given users Kerberos username and
+     password. It does this in the following manner: it first obtains a 
+     Kerberos ticket for the specified service for the given username and 
+     password from the Kerberos AS. And then attempts to decrypt the ticket 
+     using the key stored in the specified keytable file to verify the 
+     authenticity of the AS response. An empty string can be passed 
+     as the 4th (host) argument to use the fully canonicalized primary 
+     hostname of the system that the function is executed on. The fifth 
+     argument can also be an empty string to use the system's default 
+     keytab file (usually "FILE:/etc/krb5.keytab").
+
+     Note that previous versions of this module obtained a TGT from the
+     AS and then subsequently used that to obtain the service ticket from
+     the TGS. Directly obtaining the service ticket from the AS saves a
+     round trip with the KDC and the associated cryptographic computations.
 
      kpass() returns -1 if an error occurs, 0 if the username or
      password is incorrect, or 1 if password verification is
@@ -42,7 +48,7 @@ DESCRIPTION
 Prerequisites:
 
 	- perl 5
-	- MIT Kerberos V5 Release 1.2.x or better (this module
+	- MIT Kerberos V5 Release 1.3.x or better (this module
 	  also appears to work with Heimdal Kerberos, although
 	  I have not extensively tested it)
 	- Creation of an application service principal on the Kerberos
@@ -53,6 +59,10 @@ To build and install:
 
 1. Edit "Makefile.PL" to reflect the proper locations of the MIT 
    Kerberos 5 libraries and include directories for your system.
+
+   Note: if you're using Heimdal, uncomment the line:
+            'DEFINE'   => '',
+
 2. perl Makefile.PL
 3. make
 4. make test
@@ -67,6 +77,6 @@ Shumon Huque
 E-mail: <shuque -at- isc.upenn.edu>
 University of Pennsylvania.
 
-Copyright (c) 2004, 2005 Shumon Huque. All rights reserved.  This 
-program is free software; you can redistribute it and/or modify it 
-under the same terms as Perl itself.
+Copyright (c) 2005, 2006, 2007 Shumon Huque. All rights reserved.  
+This program is free software; you can redistribute it and/or modify 
+it under the same terms as Perl itself.

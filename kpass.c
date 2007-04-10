@@ -10,6 +10,7 @@
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <krb5.h>
 #include <com_err.h>
@@ -63,8 +64,7 @@ void syslog_err(const char *tag, long code, const char *format, va_list args)
  *	username, password	The username and password to verify.
  *	service, host		A local service whose key will be used to
  *                              verify the authenticity of the Kerberos 
- *                              credentials. Specifying service as NULL
- *                              says use "host" and specifying host as NULL
+ *                              credentials. Specifying host as NULL
  *                              says use my primary hostname.
  *	kt_pathname		Path of keytab file, or NULL to use default.
  *                              (Typical form "FILE:/abs/path/name".)
@@ -90,7 +90,11 @@ int kpass(username, password, service, host, kt_pathname)
     krb5_ccache                   ccache;
     char                          ccache_name[L_tmpnam + 8];
     krb5_get_init_creds_opt       gic_options;
+#ifndef NO_REPLAYCACHE
+    krb5_verify_init_creds_opt    vic_options;
+#endif
     krb5_data                     apreq_pkt;
+    char                          myhostname[256], sprinc[256];
 
     int                           have_user_principal = 0,
 	                          have_service_principal = 0,
@@ -118,6 +122,15 @@ int kpass(username, password, service, host, kt_pathname)
     FAIL(err, "from cc_default");
 #endif
 
+#ifdef CALL_FROM_PERL
+    /*
+     * for perl module interface -- i don't know how to pass a C
+     * NULL from perl (is there a way?), so translate the empty string.
+     */
+    if ( host && (!strcmp(host, "")) )
+        host = NULL;
+#endif /* CALL_FROM_PERL */
+
     err = krb5_parse_name(context, username, &user_principal);
     FAIL(err, "from krb_parse_name");
     have_user_principal = 1;
@@ -125,13 +138,19 @@ int kpass(username, password, service, host, kt_pathname)
     err = krb5_cc_initialize(context, ccache, user_principal);
     FAIL(err, "from krb_cc_initialize");
 
+    (void) memset( (char *)&credentials, 0, sizeof(credentials) );
+    if (!host) {
+        (void) gethostname(myhostname, sizeof(myhostname));
+        snprintf(sprinc, sizeof(sprinc), "%s/%s", service, myhostname);
+    } else
+        snprintf(sprinc, sizeof(sprinc), "%s/%s", service, host);
+
     krb5_get_init_creds_opt_init(&gic_options);
     krb5_get_init_creds_opt_set_tkt_life(&gic_options, TKT_LIFETIME);
 
-    (void) memset( (char *)&credentials, 0, sizeof(credentials) );
     err = krb5_get_init_creds_password(context, &credentials,
                                        user_principal, password,
-                                       0, 0, 0, 0, &gic_options);
+                                       0, 0, 0, sprinc, &gic_options);
 
 
     switch (err) {
@@ -154,25 +173,8 @@ int kpass(username, password, service, host, kt_pathname)
     err = krb5_cc_store_cred(context, ccache, &credentials);
     FAIL(err, "from krb5_cc_store_cred");
 
-#ifdef CALL_FROM_PERL
-    /*
-     * for perl module interface -- i don't know how to pass a C
-     * NULL from perl (is there a way?), so translate the empty string.
-     */
-    if ( host && (!strcmp(host, "")) )
-        host = NULL;
-
-    if ( service && (!strcmp(service, "")) )
-        service = NULL;
-#endif /* CALL_FROM_PERL */
-
-    err = krb5_sname_to_principal(
-               context,
-	       host, 
-	       service,
-	       KRB5_NT_SRV_HST,
-	       &service_principal
-	       );
+    err = krb5_sname_to_principal(context, host, service,
+				  KRB5_NT_SRV_HST, &service_principal);
     FAIL(err, "from krb5_sname_to_principal");
     have_service_principal = 1;
 
@@ -182,21 +184,18 @@ int kpass(username, password, service, host, kt_pathname)
 	have_keytab = 1;
     }
 
-    /*
-     * Construct an AP_REQ message in "apreq_pkt". This will automatically
-     * obtain a service ticket from the TGS.
-     */
+#ifndef NO_REPLAYCACHE
 
-    err = krb5_mk_req(
-               context,
-	       &auth_context,
-	       0,
-	       service,
-	       host,
-	       NULL,
-	       ccache,
-	       &apreq_pkt
-	       );
+    krb5_verify_init_creds_opt_init(&vic_options);
+    krb5_verify_init_creds_opt_set_ap_req_nofail(&vic_options, 1);
+    err = krb5_verify_init_creds(context, &credentials, service_principal,
+                                 keytab, 0, &vic_options);
+    FAIL(err, "from krb5_verify_init_creds");
+
+#else
+
+    err = krb5_mk_req(context, &auth_context, 0, service, host,
+		      NULL, ccache, &apreq_pkt);
     FAIL(err, "from krb5_mk_req");
 
     if (auth_context) {
@@ -204,38 +203,23 @@ int kpass(username, password, service, host, kt_pathname)
 	auth_context = NULL;
     }
 
-#ifdef NO_REPLAYCACHE
     err = krb5_auth_con_init(context, &auth_context);
     FAIL(err, "from krb5_auth_con_init");
 
     err = krb5_auth_con_setflags(context, auth_context, 
                                  ~KRB5_AUTH_CONTEXT_DO_TIME);
     FAIL(err, "from krb5_auth_con_setflags");
-#endif /* NO_REPLAYCACHE */
 
-    /*
-     * Now attempt to decrypt the acquired credentials.
-     */
-
-    err = krb5_rd_req(
-               context,
-	       &auth_context,
-	       &apreq_pkt,
-#ifdef NO_REPLAYCACHE
-               NULL,
-#else
-	       service_principal,
-#endif
-	       keytab,
-	       NULL,
-	       NULL
-	       );
+    err = krb5_rd_req(context, &auth_context, &apreq_pkt,
+		      service_principal, keytab, NULL, NULL);
     FAIL(err, "from krb5_rd_req");
 
     if (auth_context) {
         krb5_auth_con_free(context, auth_context);
         auth_context = NULL;
     }
+
+#endif /* NO_REPLAYCACHE */
 
     err = krb5_cc_destroy(context, ccache);
     FAIL(err, "from krb5_cc_destroy");
